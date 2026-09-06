@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>IoT Dashboard - Simple</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;background:#f3f6fb;margin:12px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+    .card{background:white;padding:12px;border-radius:8px;box-shadow:0 1px 4px rgba(0,0,0,0.08)}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+    .small{color:#666;font-size:12px}
+    #details{position:fixed;right:16px;top:16px;width:420px;max-height:80vh;overflow:auto;display:none}
+    button{background:#2563eb;color:white;border:none;padding:6px 10px;border-radius:6px;cursor:pointer}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>IoT Multi-Device Dashboard</h1>
+    <div>
+      <input id="search" placeholder="Search device...">
+    </div>
+  </header>
+
+  <section>
+    <h2>Devices</h2>
+    <div id="cards" class="grid"></div>
+  </section>
+
+  <aside id="details" class="card">
+    <div><span id="close">✖</span><h3 id="d-title">Device</h3></div>
+    <canvas id="chart" width="400" height="200"></canvas>
+    <pre id="raw" style="white-space:pre-wrap;"></pre>
+  </aside>
+
+<script>
+const socket = io();
+const cards = document.getElementById('cards');
+const details = document.getElementById('details');
+const dTitle = document.getElementById('d-title');
+const raw = document.getElementById('raw');
+const search = document.getElementById('search');
+let devices = {};
+let chartInstance = null;
+let activeDevice = null;
+
+function renderCards(snapshot) {
+  cards.innerHTML = '';
+  const q = search.value.trim().toLowerCase();
+  snapshot.forEach(dev => {
+    if (q && !(dev.deviceId||'').toLowerCase().includes(q)) return;
+    const c = document.createElement('div');
+    c.className = 'card';
+    const last = dev.lastTelemetry || {};
+    c.innerHTML = `
+      <h3>${dev.deviceId}</h3>
+      <div class="small">Type: ${dev.type || 'n/a'} • Last: ${new Date(dev.lastSeen||0).toLocaleTimeString()}</div>
+      <div style="margin-top:8px;"><div class="small">Summary:</div><div style="font-weight:700">${summaryText(last)}</div></div>
+      <div style="margin-top:8px;"><button onclick="openDetails('${dev.deviceId}')">View</button></div>
+    `;
+    cards.appendChild(c);
+  });
+}
+
+function summaryText(last) {
+  if (!last || !last.metrics) return 'No data';
+  const m = last.metrics;
+  if (m.occupiedSlots !== undefined) return `${m.occupiedSlots}/${last.totalSlots||8} occupied`;
+  if (m.fillLevel !== undefined) return `${m.fillLevel}% full`;
+  if (m.waterLevel !== undefined) return `${m.waterLevel}%`;
+  if (m.pH !== undefined) return `pH ${m.pH}`;
+  if (m.voltage !== undefined) return `${m.voltage}V`;
+  return Object.keys(m).slice(0,3).map(k=>`${k}:${m[k]}`).join(' ');
+}
+
+socket.on('connect', ()=> console.log('ws connected'));
+
+socket.on('devices_snapshot', (arr) => {
+  arr.forEach(d => devices[d.deviceId] = d);
+  renderCards(arr);
+});
+
+socket.on('mqtt_message', (evt) => {
+  if (!evt || !evt.deviceId) return;
+  if (evt.topic.endsWith('/telemetry')) {
+    devices[evt.deviceId] = devices[evt.deviceId] || { deviceId: evt.deviceId };
+    devices[evt.deviceId].lastTelemetry = evt.payload;
+    devices[evt.deviceId].lastSeen = evt.ts;
+  }
+  if (evt.topic.endsWith('/status')) {
+    devices[evt.deviceId] = devices[evt.deviceId] || { deviceId: evt.deviceId };
+    devices[evt.deviceId].status = evt.payload;
+    devices[evt.deviceId].lastSeen = evt.ts;
+  }
+  renderCards(Object.values(devices));
+  if (activeDevice === evt.deviceId) showDetails(evt.deviceId);
+});
+
+function openDetails(deviceId) { activeDevice = deviceId; showDetails(deviceId); details.style.display = 'block'; }
+
+document.getElementById('close').onclick = ()=>{ details.style.display='none'; activeDevice=null; if (chartInstance) chartInstance.destroy(); };
+
+function showDetails(deviceId) {
+  const d = devices[deviceId];
+  dTitle.innerText = deviceId;
+  raw.innerText = JSON.stringify(d.lastTelemetry || d.status || {}, null, 2);
+  const metrics = (d.lastTelemetry && d.lastTelemetry.metrics) || {};
+  const numericKeys = Object.keys(metrics).filter(k => typeof metrics[k] === 'number');
+  if (numericKeys.length > 0) {
+    const key = numericKeys[0];
+    renderChart(deviceId, key);
+  } else {
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  }
+}
+
+function renderChart(deviceId, key) {
+  const d = devices[deviceId];
+  const labels = [new Date(d.lastSeen).toLocaleTimeString()];
+  const values = [d.lastTelemetry.metrics[key]];
+  const ctx = document.getElementById('chart').getContext('2d');
+  if (chartInstance) chartInstance.destroy();
+  chartInstance = new Chart(ctx, { type: 'line', data: { labels, datasets: [{ label: key, data: values, fill:false, borderColor:'#007bff' }] }, options:{ animation:false, scales:{ y:{ beginAtZero:true } } } });
+}
+
+search.addEventListener('input', ()=> renderCards(Object.values(devices)));
+</script>
+</body>
+</html>
