@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    ports:
+      - '1883:1883'
+      - '9001:9001' # websockets
+
+  bridge:
+    build: .
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      - MQTT_BROKER=mqtt://mosquitto:1883
+      - MQTT_USER=${MQTT_USER}
+      - MQTT_PASS=${MQTT_PASS}
+      - DASH_USER=${DASH_USER}
+      - DASH_PASS=${DASH_PASS}
+    depends_on:
+      - mosquitto
+
+# Optional: add a db or persistence services here (InfluxDB/Grafana)
